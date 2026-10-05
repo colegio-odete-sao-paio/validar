@@ -1,23 +1,24 @@
 /*
  * Validação de certificados — Colégio Odete São Paio
- * Lê o token do endereço (?v=TOKEN), pergunta ao Google Apps Script e mostra o resultado.
+ * Lê o token do endereço (?v=TOKEN), busca o arquivo cifrado daquele certificado
+ * neste próprio site e o decifra aqui no navegador, com o próprio token.
+ *
  * Regras de segurança deste arquivo:
- *  - os dados recebidos são exibidos só como texto (textContent), nunca como HTML;
- *  - o token só é enviado se tiver o formato esperado;
- *  - nenhum cookie, nenhum rastreador, nenhum arquivo de outro site.
+ *  - o token nunca sai do navegador (só um identificador derivado dele, de mão única);
+ *  - o arquivo só é aceito se o selo de integridade conferir (qualquer alteração é recusada);
+ *  - os dados são exibidos só como texto (textContent), nunca como HTML;
+ *  - nenhum cookie, nenhum rastreador, nenhum arquivo ou serviço de outro site.
+ *
+ * Esquema "osp-cert-v1" — idêntico ao Publicacao.gs (Apps Script).
  */
 (function () {
   'use strict';
 
-  // ÚNICA linha a alterar na implantação: URL do app da Web (termina em /exec)
-  var URL_VALIDACAO = 'https://script.google.com/macros/s/AKfycbyWMMlGFtogiQLJ8LmSsF_wPWtwSwgMVhHFdvbHKN8Crv6-73hYFX6b0yRkT_oSu6PNBg/exec';
-
+  var PREFIXO = 'osp-cert-v1|';
+  var PASTA = 'c/';
   var FORMATO_TOKEN = /^[A-Z0-9]{20,40}$/;
-  // O Google às vezes demora (2 a 20 s) ou perde uma requisição. Estratégia:
-  // nunca abandona uma consulta em andamento; se demorar, dispara outra em paralelo
-  // e usa a primeira resposta que chegar (consulta só de leitura, repetir é seguro).
-  var DISPAROS_MS = [0, 7000, 15000];   // momentos de cada consulta (no máximo 3)
-  var TEMPO_TOTAL_MS = 45000;           // depois disso, mostra "não foi possível validar"
+  var TENTATIVAS = 3;
+  var TEMPO_TENTATIVA_MS = 10000;
   var AVISO_APOS_MS = 4000;
   var ESTADOS = ['carregando', 'valido', 'cancelado', 'nao_encontrado', 'sem_token', 'erro'];
 
@@ -46,10 +47,98 @@
   }
 
   function respostaValida(d) {
-    if (!d || typeof d !== 'object' || ESTADOS.indexOf(d.estado) === -1) return false;
-    if (d.estado !== 'valido') return true;
+    if (!d || typeof d !== 'object') return false;
+    if (d.estado === 'cancelado') return true;
+    if (d.estado !== 'valido') return false;
     return ['nome', 'evento', 'data', 'codigo'].every(function (k) {
       return typeof d[k] === 'string' && d[k].length > 0 && d[k].length <= 200;
+    });
+  }
+
+  /* ---------- cifra (WebCrypto) ---------- */
+
+  var cod = new TextEncoder();
+
+  function hmac(chave, msg) {
+    return crypto.subtle.importKey('raw', chave, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+      .then(function (k) { return crypto.subtle.sign('HMAC', k, msg); })
+      .then(function (s) { return new Uint8Array(s); });
+  }
+
+  function juntar() {
+    var total = 0, i, partes = arguments;
+    for (i = 0; i < partes.length; i++) total += partes[i].length;
+    var r = new Uint8Array(total), p = 0;
+    for (i = 0; i < partes.length; i++) { r.set(partes[i], p); p += partes[i].length; }
+    return r;
+  }
+
+  function deB64(s) {
+    var bin = atob(s), r = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) r[i] = bin.charCodeAt(i);
+    return r;
+  }
+
+  function hex(b) {
+    var s = '';
+    for (var i = 0; i < b.length; i++) s += (b[i] < 16 ? '0' : '') + b[i].toString(16);
+    return s;
+  }
+
+  function iguais(a, b) {
+    if (a.length !== b.length) return false;
+    var d = 0;
+    for (var i = 0; i < a.length; i++) d |= a[i] ^ b[i];
+    return d === 0;
+  }
+
+  function chaves(token) {
+    var t = cod.encode(token);
+    return Promise.all(['id', 'enc', 'mac'].map(function (n) { return hmac(t, cod.encode(PREFIXO + n)); }))
+      .then(function (k) { return { id: hex(k[0]), enc: k[1], mac: k[2] }; });
+  }
+
+  function decifrar(k, arq) {
+    if (!arq || arq.v !== 1 || typeof arq.n !== 'string' || typeof arq.c !== 'string' || typeof arq.t !== 'string') {
+      return Promise.reject(new Error('formato'));
+    }
+    var nonce = deB64(arq.n), cifrado = deB64(arq.c), selo = deB64(arq.t);
+    if (nonce.length !== 16 || cifrado.length > 4096) return Promise.reject(new Error('formato'));
+    return hmac(k.mac, juntar(cod.encode('v1'), nonce, cifrado)).then(function (esperado) {
+      if (!iguais(esperado, selo)) throw new Error('selo');          // arquivo alterado ou de outro certificado
+      var blocos = [];
+      for (var b = 0; b * 32 < cifrado.length; b++) {
+        blocos.push(hmac(k.enc, juntar(nonce, new Uint8Array([b >>> 24 & 255, b >>> 16 & 255, b >>> 8 & 255, b & 255]))));
+      }
+      return Promise.all(blocos).then(function (fluxos) {
+        var claro = new Uint8Array(cifrado.length);
+        for (var i = 0; i < cifrado.length; i++) claro[i] = cifrado[i] ^ fluxos[i >> 5][i & 31];
+        return JSON.parse(new TextDecoder().decode(claro));
+      });
+    });
+  }
+
+  /* ---------- consulta ---------- */
+
+  function buscar(id) {
+    var controle = ('AbortController' in window) ? new AbortController() : null;
+    var relogio = setTimeout(function () { if (controle) controle.abort(); }, TEMPO_TENTATIVA_MS);
+    return fetch(PASTA + id + '.json', {
+      method: 'GET', credentials: 'omit', cache: 'no-store', redirect: 'error',
+      signal: controle ? controle.signal : undefined
+    }).then(function (r) {
+      clearTimeout(relogio);
+      if (r.status === 404) return null;                              // não existe: não encontrado
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }, function (e) { clearTimeout(relogio); throw e; });
+  }
+
+  function buscarComNovasTentativas(id, n) {
+    return buscar(id).catch(function (e) {
+      if (n >= TENTATIVAS) throw e;
+      return new Promise(function (ok) { setTimeout(ok, 700 * n); })
+        .then(function () { return buscarComNovasTentativas(id, n + 1); });
     });
   }
 
@@ -57,63 +146,24 @@
 
   if (!token) { mostrar('sem_token'); return; }
   if (!FORMATO_TOKEN.test(token)) { mostrar('nao_encontrado'); return; }
+  if (!window.crypto || !crypto.subtle || !window.TextEncoder) { mostrar('erro'); return; }
 
-  // Se demorar, avisa que está tudo certo e é só aguardar.
   var aviso = setTimeout(function () {
     var el = document.getElementById('aguarde');
     if (el) el.hidden = false;
   }, AVISO_APOS_MS);
 
-  var controles = [];
-
-  function consultar() {
-    var controle = ('AbortController' in window) ? new AbortController() : null;
-    if (controle) controles.push(controle);
-    return fetch(URL_VALIDACAO + '?v=' + encodeURIComponent(token), {
-      method: 'GET',
-      credentials: 'omit',
-      cache: 'no-store',
-      redirect: 'follow',
-      referrerPolicy: 'no-referrer',
-      signal: controle ? controle.signal : undefined
-    })
-      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-      .then(function (d) {
-        // 'erro' vindo do servidor também conta como falha desta consulta
-        if (!respostaValida(d) || d.estado === 'erro') throw new Error('resposta inválida');
-        return d;
+  chaves(token)
+    .then(function (k) {
+      return buscarComNovasTentativas(k.id, 1).then(function (arq) {
+        if (arq === null) return { estado: 'nao_encontrado' };
+        return decifrar(k, arq);
       });
-  }
-
-  var terminou = false, disparadas = 0, falhas = 0, agendados = [];
-
-  function encerrar(estado, dados) {
-    if (terminou) return;
-    terminou = true;
-    clearTimeout(aviso);
-    clearTimeout(limite);
-    agendados.forEach(clearTimeout);
-    controles.forEach(function (c) { try { c.abort(); } catch (e) {} });
-    mostrar(estado, dados);
-  }
-
-  function disparar() {
-    if (terminou || disparadas >= DISPAROS_MS.length) return;
-    disparadas++;
-    consultar().then(
-      function (d) { encerrar(d.estado, d); },
-      function () {
-        falhas++;
-        if (terminou) return;
-        if (disparadas < DISPAROS_MS.length) disparar();         // falhou: não espera, tenta já
-        else if (falhas >= disparadas) encerrar('erro');         // todas falharam
-      }
-    );
-  }
-
-  DISPAROS_MS.forEach(function (ms, i) {
-    if (i === 0) disparar();
-    else agendados.push(setTimeout(disparar, ms));
-  });
-  var limite = setTimeout(function () { encerrar('erro'); }, TEMPO_TOTAL_MS);
+    })
+    .then(function (d) {
+      if (d.estado === 'nao_encontrado') mostrar('nao_encontrado');
+      else mostrar(respostaValida(d) ? d.estado : 'erro', d);
+    })
+    .catch(function () { mostrar('erro'); })
+    .then(function () { clearTimeout(aviso); });
 })();
