@@ -13,7 +13,12 @@
   var URL_VALIDACAO = 'https://script.google.com/macros/s/AKfycbyWMMlGFtogiQLJ8LmSsF_wPWtwSwgMVhHFdvbHKN8Crv6-73hYFX6b0yRkT_oSu6PNBg/exec';
 
   var FORMATO_TOKEN = /^[A-Z0-9]{20,40}$/;
-  var TEMPO_LIMITE_MS = 15000;
+  // O Google às vezes demora ou perde uma requisição: cada tentativa tem seu limite
+  // e a página tenta de novo sozinha (consulta só de leitura, repetir é seguro).
+  var TEMPO_TENTATIVA_MS = 12000;
+  var TENTATIVAS = 3;
+  var PAUSA_ENTRE_TENTATIVAS_MS = 800;
+  var AVISO_APOS_MS = 4000;
   var ESTADOS = ['carregando', 'valido', 'cancelado', 'nao_encontrado', 'sem_token', 'erro'];
 
   // Se alguém exibir esta página dentro de outro site (quadro), não mostra nada.
@@ -53,19 +58,42 @@
   if (!token) { mostrar('sem_token'); return; }
   if (!FORMATO_TOKEN.test(token)) { mostrar('nao_encontrado'); return; }
 
-  var controle = ('AbortController' in window) ? new AbortController() : null;
-  var relogio = setTimeout(function () { if (controle) controle.abort(); }, TEMPO_LIMITE_MS);
+  // Se demorar, avisa que está tudo certo e é só aguardar.
+  var aviso = setTimeout(function () {
+    var el = document.getElementById('aguarde');
+    if (el) el.hidden = false;
+  }, AVISO_APOS_MS);
 
-  fetch(URL_VALIDACAO + '?v=' + encodeURIComponent(token), {
-    method: 'GET',
-    credentials: 'omit',
-    cache: 'no-store',
-    redirect: 'follow',
-    referrerPolicy: 'no-referrer',
-    signal: controle ? controle.signal : undefined
-  })
-    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-    .then(function (d) { mostrar(respostaValida(d) ? d.estado : 'erro', d); })
+  function consultar() {
+    var controle = ('AbortController' in window) ? new AbortController() : null;
+    var relogio = setTimeout(function () { if (controle) controle.abort(); }, TEMPO_TENTATIVA_MS);
+    return fetch(URL_VALIDACAO + '?v=' + encodeURIComponent(token), {
+      method: 'GET',
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'follow',
+      referrerPolicy: 'no-referrer',
+      signal: controle ? controle.signal : undefined
+    })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (d) {
+        clearTimeout(relogio);
+        // 'erro' vindo do servidor também merece nova tentativa
+        if (!respostaValida(d) || d.estado === 'erro') throw new Error('resposta inválida');
+        return d;
+      }, function (e) { clearTimeout(relogio); throw e; });
+  }
+
+  function tentar(n) {
+    return consultar().catch(function (e) {
+      if (n >= TENTATIVAS) throw e;
+      return new Promise(function (ok) { setTimeout(ok, PAUSA_ENTRE_TENTATIVAS_MS); })
+        .then(function () { return tentar(n + 1); });
+    });
+  }
+
+  tentar(1)
+    .then(function (d) { mostrar(d.estado, d); })
     .catch(function () { mostrar('erro'); })
-    .then(function () { clearTimeout(relogio); });
+    .then(function () { clearTimeout(aviso); });
 })();
