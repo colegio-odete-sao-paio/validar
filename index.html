@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Segurança: só carrega arquivos deste próprio site e só conversa com o Google Apps Script -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src https://script.google.com https://script.googleusercontent.com; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#002352">
+  <title>Validação de Certificado • Colégio Odete São Paio</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/icone-32.png">
+  <link rel="apple-touch-icon" href="assets/icone-180.png">
+  <link rel="stylesheet" href="estilo.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main class="cartao" aria-live="polite">
+
+    <header class="topo">
+      <img class="logo" src="assets/logo.png" width="360" height="131" alt="Colégio Odete São Paio">
+      <p class="subtitulo">Validação de Certificado</p>
+    </header>
+
+    <section class="conteudo">
+
+      <!-- Validando (estado inicial) -->
+      <div data-estado="carregando" class="estado">
+        <div class="selo neutro">
+          <div class="girando" aria-hidden="true"></div>
+          <p class="titulo">Validando certificado…</p>
+        </div>
+      </div>
+
+      <!-- Válido -->
+      <div data-estado="valido" class="estado" hidden>
+        <div class="selo valido">
+          <div class="icone" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <p class="titulo">✓ CERTIFICADO VÁLIDO</p>
+        </div>
+        <dl class="dados">
+          <div class="campo"><dt>Nome do profissional</dt><dd class="nome" id="v-nome"></dd></div>
+          <div class="campo"><dt>Evento</dt><dd id="v-evento"></dd></div>
+          <div class="campo"><dt>Data de participação</dt><dd id="v-data"></dd></div>
+          <div class="campo"><dt>Código</dt><dd class="codigo" id="v-codigo"></dd></div>
+          <div class="campo"><dt>Instituição</dt><dd>Colégio Odete São Paio</dd></div>
+        </dl>
+        <p class="mensagem">Este documento encontra-se registrado e validado pelo Colégio Odete São Paio.</p>
+        <p class="conferir">Confira se o nome acima é exatamente o mesmo do certificado apresentado.</p>
+      </div>
+
+      <!-- Cancelado -->
+      <div data-estado="cancelado" class="estado" hidden>
+        <div class="selo invalido">
+          <div class="icone" aria-hidden="true"><svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></div>
+          <p class="titulo">CERTIFICADO INVÁLIDO</p>
+          <p class="texto">Este certificado foi cancelado e não possui validade.</p>
+        </div>
+      </div>
+
+      <!-- Não encontrado -->
+      <div data-estado="nao_encontrado" class="estado" hidden>
+        <div class="selo invalido">
+          <div class="icone" aria-hidden="true"><svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></div>
+          <p class="titulo">CERTIFICADO NÃO ENCONTRADO</p>
+          <p class="texto">O código de validação não corresponde a nenhum certificado registrado. Verifique se o QR Code foi escaneado do documento original.</p>
+        </div>
+      </div>
+
+      <!-- Sem token -->
+      <div data-estado="sem_token" class="estado" hidden>
+        <div class="selo neutro">
+          <div class="icone" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM17 20h3v-3"/></svg></div>
+          <p class="titulo">VALIDAÇÃO DE CERTIFICADOS</p>
+          <p class="texto">Para conferir a autenticidade de um certificado, escaneie o QR Code impresso no próprio documento.</p>
+        </div>
+      </div>
+
+      <!-- Erro / sem conexão -->
+      <div data-estado="erro" class="estado" hidden>
+        <div class="selo aviso">
+          <div class="icone" aria-hidden="true"><svg viewBox="0 0 24 24"><line x1="12" y1="7" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17.01"/></svg></div>
+          <p class="titulo">NÃO FOI POSSÍVEL VALIDAR AGORA</p>
+          <p class="texto">Verifique sua conexão e tente novamente em alguns minutos. Se persistir, entre em contato com o Colégio Odete São Paio.</p>
+        </div>
+      </div>
+
+      <noscript>
+        <div class="selo aviso"><p class="titulo">ATIVE O JAVASCRIPT</p>
+        <p class="texto">A validação precisa de JavaScript ativado no navegador.</p></div>
+      </noscript>
+
+    </section>
+
+    <aside class="oficial">
+      Endereço oficial de validação: <strong>validar.odetesaopaio.com.br</strong>.
+      Confira se é o mesmo que aparece no seu navegador.
+    </aside>
+  </main>
+
+  <footer class="rodape">Sistema de validação de certificados • Colégio&nbsp;Odete&nbsp;São&nbsp;Paio</footer>
+</body>
+</html>
