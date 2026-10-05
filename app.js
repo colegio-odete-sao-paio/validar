@@ -13,11 +13,11 @@
   var URL_VALIDACAO = 'https://script.google.com/macros/s/AKfycbyWMMlGFtogiQLJ8LmSsF_wPWtwSwgMVhHFdvbHKN8Crv6-73hYFX6b0yRkT_oSu6PNBg/exec';
 
   var FORMATO_TOKEN = /^[A-Z0-9]{20,40}$/;
-  // O Google às vezes demora ou perde uma requisição: cada tentativa tem seu limite
-  // e a página tenta de novo sozinha (consulta só de leitura, repetir é seguro).
-  var TEMPO_TENTATIVA_MS = 12000;
-  var TENTATIVAS = 3;
-  var PAUSA_ENTRE_TENTATIVAS_MS = 800;
+  // O Google às vezes demora (2 a 20 s) ou perde uma requisição. Estratégia:
+  // nunca abandona uma consulta em andamento; se demorar, dispara outra em paralelo
+  // e usa a primeira resposta que chegar (consulta só de leitura, repetir é seguro).
+  var DISPAROS_MS = [0, 7000, 15000];   // momentos de cada consulta (no máximo 3)
+  var TEMPO_TOTAL_MS = 45000;           // depois disso, mostra "não foi possível validar"
   var AVISO_APOS_MS = 4000;
   var ESTADOS = ['carregando', 'valido', 'cancelado', 'nao_encontrado', 'sem_token', 'erro'];
 
@@ -64,9 +64,11 @@
     if (el) el.hidden = false;
   }, AVISO_APOS_MS);
 
+  var controles = [];
+
   function consultar() {
     var controle = ('AbortController' in window) ? new AbortController() : null;
-    var relogio = setTimeout(function () { if (controle) controle.abort(); }, TEMPO_TENTATIVA_MS);
+    if (controle) controles.push(controle);
     return fetch(URL_VALIDACAO + '?v=' + encodeURIComponent(token), {
       method: 'GET',
       credentials: 'omit',
@@ -77,23 +79,41 @@
     })
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function (d) {
-        clearTimeout(relogio);
-        // 'erro' vindo do servidor também merece nova tentativa
+        // 'erro' vindo do servidor também conta como falha desta consulta
         if (!respostaValida(d) || d.estado === 'erro') throw new Error('resposta inválida');
         return d;
-      }, function (e) { clearTimeout(relogio); throw e; });
+      });
   }
 
-  function tentar(n) {
-    return consultar().catch(function (e) {
-      if (n >= TENTATIVAS) throw e;
-      return new Promise(function (ok) { setTimeout(ok, PAUSA_ENTRE_TENTATIVAS_MS); })
-        .then(function () { return tentar(n + 1); });
-    });
+  var terminou = false, disparadas = 0, falhas = 0, agendados = [];
+
+  function encerrar(estado, dados) {
+    if (terminou) return;
+    terminou = true;
+    clearTimeout(aviso);
+    clearTimeout(limite);
+    agendados.forEach(clearTimeout);
+    controles.forEach(function (c) { try { c.abort(); } catch (e) {} });
+    mostrar(estado, dados);
   }
 
-  tentar(1)
-    .then(function (d) { mostrar(d.estado, d); })
-    .catch(function () { mostrar('erro'); })
-    .then(function () { clearTimeout(aviso); });
+  function disparar() {
+    if (terminou || disparadas >= DISPAROS_MS.length) return;
+    disparadas++;
+    consultar().then(
+      function (d) { encerrar(d.estado, d); },
+      function () {
+        falhas++;
+        if (terminou) return;
+        if (disparadas < DISPAROS_MS.length) disparar();         // falhou: não espera, tenta já
+        else if (falhas >= disparadas) encerrar('erro');         // todas falharam
+      }
+    );
+  }
+
+  DISPAROS_MS.forEach(function (ms, i) {
+    if (i === 0) disparar();
+    else agendados.push(setTimeout(disparar, ms));
+  });
+  var limite = setTimeout(function () { encerrar('erro'); }, TEMPO_TOTAL_MS);
 })();
